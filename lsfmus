@@ -1,0 +1,122 @@
+#!/bin/bash
+
+# Load configuration from lsfmus.config
+load_config() {
+    CONFIG_FILE="$HOME/.config/lsfmus.config"
+    if [[ ! -f "$CONFIG_FILE" ]]; then
+        CONFIG_FILE="./lsfmus.config"
+        if [[ ! -f "$CONFIG_FILE" ]]; then
+            echo "Configuration file not found in either $HOME/.config or the current directory. Creating default configuration file at $CONFIG_FILE"
+            mkdir -p "$(dirname "$CONFIG_FILE")"
+            cat <<EOL > "$CONFIG_FILE"
+MOD_DIR="<mod_dir>"
+USERNAME="<factorio_username>"
+TOKEN="<factorio_token>"
+CMDON_UPDATE="echo 'Mods updated successfully.'"
+CMDON_NOUPDATE="echo 'No updates were necessary.'"
+CMDON_FAILURE="echo 'Some mods failed to update.'"
+EOL
+            echo "Default configuration file created. Please update the configuration file with your details and re-run the script."
+            exit 1
+        fi
+    fi
+
+    source "$CONFIG_FILE"
+
+    if [[ -z "$MOD_DIR" || -z "$USERNAME" || -z "$TOKEN" ]]; then
+        echo "Configuration file is missing required variables (MOD_DIR, USERNAME, TOKEN)."
+        exit 1
+    fi
+}
+
+# Check for required dependencies
+check_dependencies() {
+    if ! command -v jq &> /dev/null || ! command -v curl &> /dev/null; then
+        echo "jq and curl are required. Install them with 'sudo apt install jq curl'."
+        exit 1
+    fi
+}
+
+# Global counters for summary
+updated_count=0
+uptodate_count=0
+failed_count=0
+
+# Update mods
+update_mods() {
+    echo "Fetching list of mods from mod-list.json..."
+
+    # Process substitution to keep the while loop in the same shell
+    while read -r mod_name; do
+        [[ "$mod_name" == "base" ]] && continue
+
+        MOD_INFO=$(curl -s "https://mods.factorio.com/api/mods/$mod_name" | jq '.')
+        [[ "$MOD_INFO" == "null" ]] && continue
+
+        LATEST_VERSION=$(echo "$MOD_INFO" | jq -r '.releases[-1].version')
+        DOWNLOAD_URL=$(echo "$MOD_INFO" | jq -r '.releases[-1].download_url')
+
+        LOCAL_MOD_FILES=("$MOD_DIR/$mod_name"_*.zip)
+        if [[ -e "${LOCAL_MOD_FILES[0]}" ]]; then
+            for LOCAL_MOD_FILE in "${LOCAL_MOD_FILES[@]}"; do
+                INSTALLED_VERSION=$(basename "$LOCAL_MOD_FILE" | sed "s/^${mod_name}_//" | sed 's/\.zip$//')
+                if [[ "$INSTALLED_VERSION" == "$LATEST_VERSION" ]]; then
+                    echo "Skipped: $mod_name (version: $LATEST_VERSION)"
+                    ((uptodate_count++))
+                    continue 2
+                fi
+            done
+        fi
+
+        # Download the latest version
+        curl -s -L -o "$MOD_DIR/$mod_name"_"$LATEST_VERSION".zip -u "$USERNAME:$TOKEN" "https://mods.factorio.com$DOWNLOAD_URL?username=$USERNAME&token=$TOKEN"
+        if [[ -f "$MOD_DIR/$mod_name"_"$LATEST_VERSION".zip ]]; then
+            ACTUAL_SIZE=$(stat -c%s "$MOD_DIR/$mod_name"_"$LATEST_VERSION".zip)
+            echo "Installed: $mod_name (version: $LATEST_VERSION, size: $((ACTUAL_SIZE / 1024)) KB)"
+            ((updated_count++))
+        else
+            echo "Failed to download: $mod_name"
+            ((failed_count++))
+        fi
+    done < <(jq -r '.mods[] | select(.enabled == true) | .name' "$MOD_LIST")
+
+    # Execute commands based on the update results
+    if [[ "$updated_count" -gt 0 ]]; then
+        if [[ -n "CMDON_UPDATE" ]]; then
+            eval "$CMDON_UPDATE"
+        fi
+    else
+        if [[ -n "CMDON_NOUPDATE" ]]; then
+            eval "$CMDON_NOUPDATE"
+        fi
+        
+    fi
+
+    if [[ "$failed_count" -gt 0 ]]; then
+        if [[ -n "CMDON_FAILURE" ]]; then
+            eval "$CMDON_FAILURE"
+        fi
+    fi
+}
+
+# Load configuration
+load_config
+
+# Check for required dependencies
+check_dependencies
+
+# Execute CMDON_BEFORE if it exists
+if [[ -n "$CMDON_BEFORE" ]]; then
+    echo "Executing pre-update command..."
+    eval "$CMDON_BEFORE"
+fi
+
+
+# Define the path to mod-list.json
+MOD_LIST="$MOD_DIR/mod-list.json"
+
+# Start updating mods
+update_mods
+
+# Print summary
+echo "Summary: ${updated_count} updated, ${uptodate_count} already up-to-date, ${failed_count} failed."
