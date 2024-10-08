@@ -1,0 +1,13 @@
+{
+  "name": "Factorio Dev Container",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": "."
+  },
+  "settings": {
+    "terminal.integrated.shell.linux": "/bin/bash"
+  },
+  "extensions": [],
+  "postCreateCommand": "echo 'Container setup complete!'",
+  "remoteUser": "factorio"
+}
