@@ -48,7 +48,7 @@ update_mods() {
 
     # Process substitution to keep the while loop in the same shell
     while read -r mod_name; do
-        [[ "$mod_name" == "base" ]] && continue
+        [[ "$mod_name" == "base" || "$mod_name" == "quality" || "$mod_name" == "space-age" || "$mod_name" == "elevated-rails" ]] && continue
 
         MOD_INFO=$(curl -s "https://mods.factorio.com/api/mods/$mod_name" | jq '.')
         [[ "$MOD_INFO" == "null" ]] && continue
